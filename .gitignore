@@ -1,0 +1,68 @@
+# CMake / build trees
+build/
+build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+_deps/
+
+# Visual Studio / MSBuild
+.vs/
+.vscode/
+.idea/
+Debug/
+Release/
+RelWithDebInfo/
+MinSizeRel/
+Win32/
+x64/
+x86/
+ipch/
+*.user
+*.suo
+*.sln
+*.slnx
+*.vcxproj
+*.vcxproj.user
+*.vcxproj.filters
+*.sln.docstates
+*.tlog/
+*.lastbuildstate
+*.recipe
+*.log
+
+# Compiler/linker intermediates
+*.obj
+*.iobj
+*.ipdb
+*.pdb
+*.ilk
+*.idb
+*.pch
+*.res
+*.exp
+*.map
+*.tmp
+
+# Generated Text2Mdx output
+out/
+out-*/
+*.mdx
+*.blp
+*.tga
+*.text2mdx.json
+
+# Local dependency download/inspection scratch
+third_party/_downloads/
+third_party/_inspect/
+
+# Unneeded files from the ResIL SDK package
+third_party/resil-sdk/**/ResIL.pdb
+third_party/resil-sdk/**/ResIL.map
+third_party/resil-sdk/**/SDL*.dll
+third_party/resil-sdk/**/SDL*.exe
+third_party/resil-sdk/**/SDLTest.exe
