@@ -12,6 +12,7 @@ struct Options {
     std::string style = "damage_red";
     std::filesystem::path styleConfig = L"presets/styles.json";
     std::filesystem::path referencePath;
+    std::filesystem::path modelTemplatePath;
     std::filesystem::path outPath;
     TextureFormat textureFormat = TextureFormat::Blp;
     std::wstring texturePath;
@@ -19,6 +20,7 @@ struct Options {
     bool styleSpecified = false;
     bool styleConfigSpecified = false;
     bool textureFormatSpecified = false;
+    bool externalReferenceModel = false;
     bool listStyles = false;
     bool help = false;
 };

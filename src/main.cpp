@@ -17,6 +17,21 @@ namespace text2mdx {
 
 namespace {
 
+void enableAnsiColors() {
+    HANDLE output = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (output == INVALID_HANDLE_VALUE) {
+        return;
+    }
+
+    DWORD mode = 0;
+    if (!GetConsoleMode(output, &mode)) {
+        return;
+    }
+
+    mode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+    SetConsoleMode(output, mode);
+}
+
 std::filesystem::path exeDirectory() {
     std::wstring buffer(MAX_PATH, L'\0');
     DWORD size = GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
@@ -44,6 +59,11 @@ std::filesystem::path resolveStyleConfig(const std::filesystem::path& requested)
     const std::filesystem::path installed = exeDirectory().parent_path() / requested;
     if (std::filesystem::exists(installed)) {
         return installed;
+    }
+
+    const std::filesystem::path projectRoot = exeDirectory().parent_path().parent_path() / requested;
+    if (std::filesystem::exists(projectRoot)) {
+        return projectRoot;
     }
 
     return requested;
@@ -119,6 +139,17 @@ std::filesystem::path pathFromUtf8(const std::string& value) {
     return std::filesystem::path(utf8ToWide(value));
 }
 
+std::filesystem::path resolveSidecarPath(const std::filesystem::path& sidecarPath, const std::string& value) {
+    std::filesystem::path path = pathFromUtf8(value);
+    if (!path.is_absolute()) {
+        const std::filesystem::path besideSidecar = sidecarPath.parent_path() / path;
+        if (std::filesystem::exists(besideSidecar)) {
+            return besideSidecar;
+        }
+    }
+    return path;
+}
+
 void applyReferenceTemplate(Options& options) {
     if (options.referencePath.empty()) {
         return;
@@ -126,9 +157,9 @@ void applyReferenceTemplate(Options& options) {
 
     const std::filesystem::path infoPath = templateInfoPath(options.referencePath);
     if (!std::filesystem::exists(infoPath)) {
-        throw std::runtime_error(
-            "Reference model has no Text2Mdx sidecar: " + infoPath.u8string() +
-            ". Generate the reference with Text2Mdx first, or use --style directly.");
+        options.externalReferenceModel = true;
+        options.modelTemplatePath = options.referencePath;
+        return;
     }
 
     const JsonValue root = parseJson(readTextFile(infoPath));
@@ -141,20 +172,17 @@ void applyReferenceTemplate(Options& options) {
     }
     if (!options.styleConfigSpecified) {
         if (const JsonValue* styleConfig = root.find("style_config")) {
-            std::filesystem::path candidate = pathFromUtf8(styleConfig->asString());
-            if (!candidate.is_absolute()) {
-                const std::filesystem::path besideTemplate = infoPath.parent_path() / candidate;
-                if (std::filesystem::exists(besideTemplate)) {
-                    candidate = besideTemplate;
-                }
-            }
-            options.styleConfig = candidate;
+            options.styleConfig = resolveSidecarPath(infoPath, styleConfig->asString());
         }
     }
     if (!options.textureFormatSpecified) {
         if (const JsonValue* textureFormat = root.find("texture_format")) {
             options.textureFormat = parseTextureFormat(utf8ToWide(textureFormat->asString()));
         }
+    }
+    if (const JsonValue* modelTemplate = root.find("model_template")) {
+        options.externalReferenceModel = true;
+        options.modelTemplatePath = resolveSidecarPath(infoPath, modelTemplate->asString());
     }
 }
 
@@ -174,8 +202,12 @@ void writeTemplateInfo(const Options& options) {
         << "  \"text2mdx_template_version\": 1,\n"
         << "  \"style\": \"" << jsonEscape(options.style) << "\",\n"
         << "  \"style_config\": \"" << jsonEscape(options.styleConfig.u8string()) << "\",\n"
-        << "  \"texture_format\": \"" << textureFormatName(options.textureFormat) << "\"\n"
-        << "}\n";
+        << "  \"texture_format\": \"" << textureFormatName(options.textureFormat) << "\"";
+    if (options.externalReferenceModel && !options.modelTemplatePath.empty()) {
+        file << ",\n"
+            << "  \"model_template\": \"" << jsonEscape(options.modelTemplatePath.u8string()) << "\"";
+    }
+    file << "\n}\n";
 }
 
 std::wstring normalizeMdxPath(std::wstring value) {
@@ -191,6 +223,10 @@ std::wstring defaultTexturePath(const std::filesystem::path& outPath, TextureFor
     return (std::filesystem::path(L"Textures") / (outPath.stem().wstring() + textureFormatExtension(format))).wstring();
 }
 
+std::wstring defaultLocalTexturePath(const std::filesystem::path& outPath, TextureFormat format) {
+    return outPath.stem().wstring() + textureFormatExtension(format);
+}
+
 std::filesystem::path textureDiskPath(const std::filesystem::path& outPath, const std::wstring& mdxTexturePath) {
     const std::filesystem::path path(mdxTexturePath);
     if (path.is_absolute()) {
@@ -201,6 +237,7 @@ std::filesystem::path textureDiskPath(const std::filesystem::path& outPath, cons
 
 int run(int argc, wchar_t** argv) {
     SetConsoleOutputCP(CP_UTF8);
+    enableAnsiColors();
     Options options = parseOptions(argc, argv);
     if (options.help) {
         printUsage();
@@ -223,8 +260,11 @@ int run(int argc, wchar_t** argv) {
     const TextStyle& style = styles.get(options.style);
     const Image image = renderText(options.text, style);
 
+    const bool useLocalTexturePath = options.externalReferenceModel && options.texturePath.empty();
     const std::wstring mdxTexturePathW = normalizeMdxPath(options.texturePath.empty()
-        ? defaultTexturePath(options.outPath, options.textureFormat)
+        ? (useLocalTexturePath
+            ? defaultLocalTexturePath(options.outPath, options.textureFormat)
+            : defaultTexturePath(options.outPath, options.textureFormat))
         : options.texturePath);
     const std::filesystem::path diskTexturePath = textureDiskPath(options.outPath, mdxTexturePathW);
 
@@ -234,10 +274,12 @@ int run(int argc, wchar_t** argv) {
         writeTexture(TextureWriteRequest{image, TextureFormat::Png, options.previewPng});
     }
 
+    const std::string modelName = wideToUtf8(options.outPath.stem().wstring());
+    const std::string mdxTexturePath = wideToUtf8(mdxTexturePathW);
     MdxOptions mdx;
     mdx.outPath = options.outPath;
-    mdx.modelName = wideToUtf8(options.outPath.stem().wstring());
-    mdx.texturePath = wideToUtf8(mdxTexturePathW);
+    mdx.modelName = modelName;
+    mdx.texturePath = mdxTexturePath;
     mdx.contentWidth = image.width;
     mdx.contentHeight = image.height;
     mdx.uMax = texture.uMax;

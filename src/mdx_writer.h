@@ -16,6 +16,14 @@ struct MdxOptions {
     float planeHeight = 120.0f;
 };
 
+struct MdxTemplateOptions {
+    std::filesystem::path templatePath;
+    std::filesystem::path outPath;
+    std::string modelName = "Text2Mdx";
+    std::string texturePath;
+};
+
 void writeMdxBillboard(const MdxOptions& options);
+void writeMdxFromTemplate(const MdxTemplateOptions& options);
 
 } // namespace text2mdx

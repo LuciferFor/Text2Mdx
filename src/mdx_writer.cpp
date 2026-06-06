@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <stdexcept>
 #include <vector>
 
@@ -114,7 +115,7 @@ void writeTexture(Writer& writer, const std::string& texturePath) {
     Chunk chunk(writer, "TEXS");
     writer.u32(0);
     writer.fixedString(texturePath, 260);
-    writer.u32(0);
+    writer.u32(3); // Wrap width and height; old Warcraft III tools expect this for local textures.
 }
 
 void writeMaterial(Writer& writer) {
@@ -213,11 +214,11 @@ void writeGeoset(Writer& writer, float halfWidth, float halfHeight, float uMax, 
 
 void writeBone(Writer& writer) {
     Chunk chunk(writer, "BONE");
-    writer.u32(96); // Generic object byte length.
+    writer.u32(96); // Generic Node byte length. Bone geoset IDs follow the node.
     writer.fixedString("Billboard_Bone", 80);
     writer.i32(0);
     writer.i32(-1);
-    writer.u32(0x100 | 0x8); // Bone flag plus Billboarded.
+    writer.u32(0x100); // Bone flag. Keep static for old model-editor preview reliability.
     writer.i32(0);
     writer.i32(-1);
 }
@@ -273,6 +274,77 @@ void writeMdxBillboard(const MdxOptions& options) {
     }
     const std::vector<std::uint8_t>& bytes = writer.bytes();
     file.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+}
+
+void writeMdxFromTemplate(const MdxTemplateOptions& options) {
+    if (options.templatePath.empty()) {
+        throw std::runtime_error("Reference MDX template path is empty.");
+    }
+    if (options.texturePath.empty()) {
+        throw std::runtime_error("MDX texture path is empty.");
+    }
+    if (options.texturePath.size() >= 260) {
+        throw std::runtime_error("MDX texture path is too long; keep it below 260 bytes: " + options.texturePath);
+    }
+
+    std::ifstream input(options.templatePath, std::ios::binary);
+    if (!input) {
+        throw std::runtime_error("Could not open reference MDX template: " + options.templatePath.u8string());
+    }
+
+    const std::vector<char> rawBytes(
+        (std::istreambuf_iterator<char>(input)),
+        std::istreambuf_iterator<char>());
+    std::vector<std::uint8_t> bytes(rawBytes.begin(), rawBytes.end());
+    if (bytes.size() < 12 || std::memcmp(bytes.data(), "MDLX", 4) != 0) {
+        throw std::runtime_error("Reference template is not a binary MDX file: " + options.templatePath.u8string());
+    }
+
+    bool patchedTexture = false;
+    std::size_t position = 4;
+    while (position + 8 <= bytes.size()) {
+        const char* tag = reinterpret_cast<const char*>(bytes.data() + position);
+        const std::uint32_t chunkSize =
+            static_cast<std::uint32_t>(bytes[position + 4]) |
+            (static_cast<std::uint32_t>(bytes[position + 5]) << 8) |
+            (static_cast<std::uint32_t>(bytes[position + 6]) << 16) |
+            (static_cast<std::uint32_t>(bytes[position + 7]) << 24);
+        const std::size_t dataStart = position + 8;
+        const std::size_t dataEnd = dataStart + chunkSize;
+        if (dataEnd > bytes.size()) {
+            throw std::runtime_error("Reference MDX has a truncated chunk: " + options.templatePath.u8string());
+        }
+
+        if (std::memcmp(tag, "MODL", 4) == 0 && chunkSize >= 80) {
+            std::fill(bytes.begin() + static_cast<std::ptrdiff_t>(dataStart),
+                bytes.begin() + static_cast<std::ptrdiff_t>(dataStart + 80), std::uint8_t{0});
+            const std::size_t count = std::min<std::size_t>(options.modelName.size(), 79);
+            std::copy_n(options.modelName.begin(), count, bytes.begin() + static_cast<std::ptrdiff_t>(dataStart));
+        } else if (std::memcmp(tag, "TEXS", 4) == 0 && chunkSize >= 264) {
+            const std::size_t pathStart = dataStart + 4;
+            std::fill(bytes.begin() + static_cast<std::ptrdiff_t>(pathStart),
+                bytes.begin() + static_cast<std::ptrdiff_t>(pathStart + 260), std::uint8_t{0});
+            std::copy(options.texturePath.begin(), options.texturePath.end(),
+                bytes.begin() + static_cast<std::ptrdiff_t>(pathStart));
+            patchedTexture = true;
+            break;
+        }
+
+        position = dataEnd;
+    }
+
+    if (!patchedTexture) {
+        throw std::runtime_error("Reference MDX has no patchable TEXS texture chunk: " + options.templatePath.u8string());
+    }
+
+    if (!options.outPath.parent_path().empty()) {
+        std::filesystem::create_directories(options.outPath.parent_path());
+    }
+    std::ofstream output(options.outPath, std::ios::binary);
+    if (!output) {
+        throw std::runtime_error("Could not open MDX output: " + options.outPath.u8string());
+    }
+    output.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
 }
 
 } // namespace text2mdx
